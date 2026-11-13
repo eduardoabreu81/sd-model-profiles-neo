@@ -11,7 +11,7 @@
 
 </div>
 
-Keep **several setups for the same UI Preset** - Qwen-Image 2.1 *Base* and *Turbo*, SDXL and Pony, a fast draft and a final pass - and switch between them in one click. A profile holds what Forge's preset holds: **checkpoint, VAE / Text Encoder, Diffusion in Low Bits, sampler, schedule type, steps, CFG, Shift / Distilled CFG, Hires. steps and CFG, width and height**, for txt2img and img2img.
+Keep **several setups for the same UI Preset** - Qwen-Image 2.1 *Base* and *Turbo*, SDXL and Pony, a fast draft and a final pass - and switch between them in one click. A profile holds what Forge's preset holds: **checkpoint, VAE / Text Encoder, Diffusion in Low Bits, sampler, schedule type, steps, CFG, Shift / Distilled CFG, Hires. steps and CFG**, for txt2img and img2img. The image size stays yours: switching profiles never changes it.
 
 > [!Important]
 > Model Profiles builds on Forge Neo's own **UI Preset** settings (Settings > presets) and selects model files through Forge's own functions. Nothing of Forge Neo is changed, and generation is never touched.
@@ -80,7 +80,7 @@ Any extension can suggest settings for its model: put a `model_profiles.json` in
 
 - `preset` is the UI Preset name (`xl`, `flux`, `qwen21`, or one an extension adds)
 - top-level settings apply to txt2img and img2img; `txt2img` / `img2img` objects override them
-- settings: `sampler`, `scheduler`, `steps`, `cfg`, `shift` (or `distilled_cfg`), `width`, `height`, and for txt2img `hr_steps`, `hr_cfg`, `hr_shift`
+- settings: `sampler`, `scheduler`, `steps`, `cfg`, `shift` (or `distilled_cfg`), and for txt2img `hr_steps`, `hr_cfg`, `hr_shift`; `width` and `height` too, for a model that needs a size of its own (profiles saved from the screen leave the size out)
 - model files: `checkpoint`, `modules` (list of file names), `dtype`
 - prompt tokens: `prompt` and `negative_prompt` (text with commas, or a list), such as a LoRA tag
 - anything left out keeps its current value, so a suggestion can change only the sampler and steps

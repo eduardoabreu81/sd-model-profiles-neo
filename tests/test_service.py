@@ -330,3 +330,13 @@ def test_snapshot_notices_a_size_set_to_keep(tmp_path):
     svc.apply("h3i", "f:h3i")
     snap = svc.store.profiles("h3i")
     assert [p["name"] for p in snap] == [SNAPSHOT_NAME] and snap[0]["values"]["txt2img"]["width"] == 0
+
+
+def test_saving_from_the_controls_leaves_the_size_out(svc, forge):
+    model, settings = ui_values(forge, "qwen21")
+    settings["txt2img"].update(steps=8, width=1328, height=1328)
+    current = svc.current_values("qwen21", model, settings)
+    assert "width" not in current["txt2img"] and "height" not in current["txt2img"]
+    pid = svc.command("qwen21", None, "save_new", "Turbo", current)["select"]
+    svc.apply("qwen21", pid)
+    assert forge.options["qwen21_t2i_width"] == 0  # the preset keeps "keep the current size"

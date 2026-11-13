@@ -30,6 +30,9 @@ from .store import Store
 
 logger = logging.getLogger("model_profiles")
 SNAPSHOT_NAME = "My Forge preset"
+# the image size is the user's, not the profile's: saving from the controls leaves it out (a suggestion file may
+# still set one)
+UNSAVED_FIELDS = {"width", "height"}
 HISTORY_SHOWN = 15
 
 
@@ -231,7 +234,7 @@ class Service:
             values["tokens"] = tokens
         for tab in TABS:
             tab_values = {f: v for f, v in (settings.get(tab) or {}).items()
-                          if v is not None and fields.option_key(arch, tab, f) in keys}
+                          if v is not None and f not in UNSAVED_FIELDS and fields.option_key(arch, tab, f) in keys}
             if tab_values:
                 values[tab] = tab_values
         return fields.normalize(values)
