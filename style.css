@@ -4,10 +4,29 @@
     display: none !important;
 }
 
+/* UI Preset with Profile under it, in one column of Forge's model row */
+.model-profiles-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 0 1 300px;
+    min-width: 240px;
+}
+
+.model-profiles-stack > #forge_ui_preset {
+    width: 100%;
+    min-width: 0;
+}
+
+.model-profiles-row {
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+}
+
 #model_profiles_select {
-    min-width: 200px;
-    max-width: 320px;
-    flex-grow: 1;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 /* the profile on screen differs from the saved one */

@@ -50,10 +50,13 @@
         return input ? input.value : undefined;
     }
 
+    // a checkpoint may show with or without its " [hash]"
+    const plain = (text) => String(text).trim().replace(/\s\[[0-9a-f]{8,12}\]$/i, "");
+
     function same(expected, actual) {
         if (actual === undefined) return true; // a control that is not on the page cannot differ
         if (typeof expected === "number") return Math.abs(parseFloat(actual) - expected) < 1e-6;
-        return String(actual).trim() === String(expected).trim();
+        return plain(actual) === plain(expected);
     }
 
     function changedControls(state) {
@@ -71,17 +74,52 @@
         if (save) save.classList.toggle(DIRTY, dirty);
     }
 
-    // after a profile is applied: a model extension's panel (H3, LTX, Idol...) may set its own sampler or steps when
-    // the checkpoint changes; if the controls ended up different from the profile, apply its settings once more
+    // After a profile is applied: a model extension's panel (H3, LTX, Idol...) may set its own sampler or steps when
+    // the checkpoint changes, and it can take seconds (Idol reads the file first). For a few seconds, whenever the
+    // controls drift from the profile, apply its settings again; stop at once if the user touches anything.
+    const WATCH_MS = 9000;
+    const MAX_REAPPLY = 3;
+    let watch = null;
+
+    function stopWatch() {
+        if (!watch) return;
+        clearInterval(watch.timer);
+        document.removeEventListener("input", watch.onUser, true);
+        document.removeEventListener("mousedown", watch.onUser, true);
+        document.removeEventListener("keydown", watch.onUser, true);
+        watch = null;
+    }
+
     window.modelProfilesVerify = () => {
-        setTimeout(() => {
+        stopWatch();
+        const started = Date.now();
+        const w = { reapplied: 0, settleUntil: started + 500 };
+        w.onUser = (e) => {
+            if (!e.isTrusted || Date.now() < w.settleUntil) return;
+            const t = e.target instanceof Element ? e.target : null;
+            if (t && t.closest(".model-profiles-menu, #model_profiles_select")) return;
+            stopWatch();
+        };
+        w.timer = setInterval(() => {
             const state = readState();
-            if (state.selected && changedControls(state).length) {
-                const reapply = byId(ID.reapply);
-                if (reapply) reapply.click();
+            if (Date.now() - started > WATCH_MS || !state.selected) {
+                stopWatch();
+                markDirty();
+                return;
             }
-            markDirty();
-        }, 700);
+            if (Date.now() >= w.settleUntil && changedControls(state).length && w.reapplied < MAX_REAPPLY) {
+                const reapply = byId(ID.reapply);
+                if (reapply) {
+                    reapply.click();
+                    w.reapplied += 1;
+                    w.settleUntil = Date.now() + 600; // let the reapplied values arrive before checking again
+                }
+            }
+        }, 300);
+        document.addEventListener("input", w.onUser, true);
+        document.addEventListener("mousedown", w.onUser, true);
+        document.addEventListener("keydown", w.onUser, true);
+        watch = w;
     };
 
     // after a menu command: hand an export over as a file
@@ -266,7 +304,30 @@
         if (e.key === "Escape") closeMenu();
     });
 
-    const start = () => setInterval(markDirty, 800);
+    // Profile under UI Preset: both in one column, with 💾 and ⋯ beside the Profile dropdown
+    function stack() {
+        const preset = byId("forge_ui_preset");
+        const select = byId(ID.select);
+        const save = byId(ID.save);
+        const more = byId(ID.more);
+        if (!preset || !select || !save || !more || preset.closest(".model-profiles-stack")) return !!preset;
+        const column = document.createElement("div");
+        column.className = "model-profiles-stack";
+        preset.parentNode.insertBefore(column, preset);
+        const row = document.createElement("div");
+        row.className = "model-profiles-row";
+        column.append(preset, row);
+        row.append(select, save, more);
+        return true;
+    }
+
+    const start = () => {
+        let tries = 0;
+        const wait = setInterval(() => {
+            if (stack() || ++tries > 50) clearInterval(wait);
+        }, 200);
+        setInterval(markDirty, 800);
+    };
     if (typeof onUiLoaded === "function") onUiLoaded(start);
     else window.addEventListener("load", start);
 })();

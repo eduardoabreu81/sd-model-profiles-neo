@@ -133,7 +133,9 @@ def resolve_checkpoint(name: str):
 
 
 def checkpoint_title(info) -> str:
-    return info.short_title if getattr(_opts(), "sd_checkpoint_dropdown_use_short", False) else info.title
+    """The checkpoint as Forge's dropdown lists it (sd_models.checkpoint_tiles): the short title or the file name,
+    never the title with the hash, which is not among the choices."""
+    return info.short_title if getattr(_opts(), "sd_checkpoint_dropdown_use_short", False) else info.name
 
 
 def checkpoint_key(name: str) -> str:

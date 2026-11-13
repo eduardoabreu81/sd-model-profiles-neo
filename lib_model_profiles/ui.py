@@ -24,12 +24,11 @@ PROMPT_SLOTS = [(("txt2img", "prompt"), "txt2img_prompt"), (("txt2img", "negativ
                 (("img2img", "prompt"), "img2img_prompt"), (("img2img", "negative"), "img2img_neg_prompt")]
 NEEDED = ["forge_ui_preset", *(e for _, e in MODEL_SLOTS), *(e for _, e in SETTING_SLOTS),
           *(e for _, e in PROMPT_SLOTS)]
-PASTE_IDS = ("model_profiles_paste_txt2img", "model_profiles_paste_img2img")
 QUIET = dict(queue=False, show_progress=False)
 VERIFY_JS = "() => { if (window.modelProfilesVerify) modelProfilesVerify(); }"
 AFTER_COMMAND_JS = "() => { if (window.modelProfilesAfterCommand) modelProfilesAfterCommand(); }"
 
-state = SimpleNamespace(service=None, controls=None, bound=False, pasted=set())
+state = SimpleNamespace(service=None, controls=None, bound=False)
 
 
 def _opt(name: str, default=True):
@@ -56,8 +55,6 @@ def capture(component, **kwargs):
             state.controls = _build()
         if not state.bound:
             _bind()
-        if state.bound:
-            _bind_paste()
     except Exception:
         logger.exception("Model Profiles: could not set up its controls; Forge works as before")
         state.bound = True  # do not retry on every component
@@ -85,7 +82,25 @@ def _build():
     c.restore = hidden_button("model_profiles_restore")
     c.reapply = hidden_button("model_profiles_reapply")
     c.arch = gr.State("")
+    _register_paste(c.profile)
     return c
+
+
+def _register_paste(dropdown):
+    """Pasted generation parameters ("Read generation parameters", Send to txt2img / img2img, PNG Info) set the
+    Profile dropdown from their "Profile" line. Forge builds the tabs (and the scripts' infotext_fields) before this
+    row and connects the paste buttons after it, so the dropdown joins the tabs' paste lists here."""
+    try:
+        from modules import infotext_utils
+    except ImportError:
+        return
+    seen = set()
+    for tab in ("txt2img", "img2img", "inpaint"):
+        fields_list = (infotext_utils.paste_fields.get(tab) or {}).get("fields")
+        if fields_list is None or id(fields_list) in seen:
+            continue  # img2img and inpaint share one list
+        seen.add(id(fields_list))
+        fields_list.append(infotext_utils.PasteField(dropdown, paste_profile))
 
 
 # region values in and out
@@ -239,18 +254,27 @@ def on_command(raw, profile_id, arch, *values):
     return _dropdown(arch, selected, keep=True), svc.page_state(arch, export=export)
 
 
-def on_paste(text, arch):
+def paste_profile(params: dict):
+    """The Profile dropdown's value for pasted generation parameters (a function in the script's infotext_fields).
+    The pasted values are already in the controls: only the dropdown follows, nothing is applied."""
     svc = state.service
-    arch = arch or ""
-    name = (text or "").strip()
+    name = str((params or {}).get("Profile") or "").strip()
+    if not name or svc is None:
+        return None
     if name.endswith("(modified)"):
         name = name[: -len("(modified)")].strip()
-    item = svc.catalog(arch).find_name(name) if name else None
+    from . import forge
+    arch = forge.current_arch()
+    item = svc.catalog(arch).find_name(name)
     if item is None:
-        return gr.update(), gr.update()
-    # the pasted parameters are already in the controls: only the dropdown follows, nothing is applied
+        return None
     svc.store.set_active(arch, item["id"])
-    return _dropdown(arch, item["id"], keep=True), svc.page_state(arch)
+    return _dropdown(arch, item["id"], keep=True)
+
+
+def on_profile_shown(arch):
+    """The dropdown changed (by the user, a paste or a command): refresh what the page script compares against."""
+    return state.service.page_state(arch or "")
 
 
 # endregion
@@ -280,16 +304,6 @@ def _bind():
     preset.change(on_preset, inputs=[preset, c.arch, *prompts], outputs=[c.profile, c.state, c.arch, *prompts],
                   **QUIET)
     gr.context.Context.root_block.load(on_load, inputs=[preset], outputs=[c.profile, c.state, c.arch], **QUIET)
+    c.profile.change(on_profile_shown, inputs=[c.arch], outputs=[c.state], **QUIET)
     state.bound = True
     logger.info("Model Profiles: connected to the UI Preset, model, sampler and prompt controls")
-
-
-def _bind_paste():
-    c = state.controls
-    if c is None:
-        return
-    for elem_id in PASTE_IDS:
-        if elem_id in COMPONENTS and elem_id not in state.pasted and _in_blocks():
-            COMPONENTS[elem_id].change(on_paste, inputs=[COMPONENTS[elem_id], c.arch], outputs=[c.profile, c.state],
-                                       **QUIET)
-            state.pasted.add(elem_id)

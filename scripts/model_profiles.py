@@ -8,7 +8,6 @@ import logging
 import os
 import sys
 
-import gradio as gr
 from modules import script_callbacks, scripts, shared
 
 EXT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,15 +75,9 @@ class Script(scripts.Script):
         return scripts.AlwaysVisible if not PROBLEM else False
 
     def ui(self, is_img2img):
-        tab = "img2img" if is_img2img else "txt2img"
-        # receives "Profile" from pasted parameters; the dropdown follows it without applying anything, since the
-        # pasted values are already in the controls
-        paste = gr.Textbox(value="", show_label=False, container=False, elem_id=f"model_profiles_paste_{tab}",
-                           elem_classes=["model-profiles-hidden"])
-        paste.do_not_save_to_config = True
-        self.infotext_fields = [(paste, INFOTEXT)]
-        self.paste_field_names = [INFOTEXT]
-        return [paste]
+        # nothing in the tabs: the Profile dropdown lives next to UI Preset, and pasted parameters reach it through
+        # Forge's paste lists (lib_model_profiles.ui._register_paste)
+        return []
 
     def process(self, p, *args):
         if PROBLEM or not getattr(shared.opts, "model_profiles_infotext", True):
