@@ -121,6 +121,9 @@ class FakeForge:
                 warnings.append(f"Schedule type \"{t.pop('scheduler')}\" is not available")
         return out, warnings
 
+    def current_checkpoint(self):
+        return getattr(self, "checkpoint", None)
+
     def extension_dirs(self):
         return self.ext_dirs
 

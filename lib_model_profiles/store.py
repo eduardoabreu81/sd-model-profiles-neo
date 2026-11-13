@@ -2,10 +2,16 @@
 never touches them.
 
     {"version": 1,
-     "profiles": {"qwen21": [{"id": "u:1a2b3c4d", "name": "Turbo 8 steps", "values": {...}}]},
+     "profiles": {"qwen21": [{"id": "u:1a2b3c4d", "name": "Turbo 8 steps", "scope": "checkpoint", "values": {...}}],
+                  "*": [...]},                 # profiles for every preset
      "defaults": {"qwen21": "u:1a2b3c4d"},     # the profile marked with a star for each preset
      "active": {"qwen21": "s:qwen2.1-forge-neo:base"},   # the profile applied last in each preset
      "snapshots": ["qwen21"]}                  # presets whose Forge settings were saved before the first write
+
+A profile's scope says where it applies:
+- "checkpoint": it holds its model files and is applied when that checkpoint is chosen in Forge's list;
+- "preset": settings only, on top of whatever checkpoint of its preset is in use;
+- "global": settings only, listed in every preset (kept under "*").
 
 Profiles of a preset whose extension is gone stay in the file and come back with it.
 """
@@ -24,6 +30,9 @@ from .history import daily_copy, write_json
 
 VERSION = 1
 NAME_LIMIT = 60
+CHECKPOINT, PRESET, GLOBAL = "checkpoint", "preset", "global"
+SCOPES = (CHECKPOINT, PRESET, GLOBAL)
+GLOBAL_KEY = "*"
 logger = logging.getLogger("model_profiles")
 
 
@@ -79,9 +88,16 @@ class Store:
             kept = []
             for item in items:
                 try:
-                    kept.append({"id": str(item["id"]), "name": clean_name(item["name"]),
-                                 "values": normalize(item["values"], source=f"{arch}/{item.get('name')}"),
-                                 "link": bool(item.get("link", False))})
+                    values = normalize(item["values"], source=f"{arch}/{item.get('name')}")
+                    scope = item.get("scope")
+                    if str(arch) == GLOBAL_KEY:
+                        scope = GLOBAL
+                    elif scope not in (CHECKPOINT, PRESET):
+                        # 0.1 files: a profile linked to its checkpoint is a checkpoint profile
+                        has_ckpt = bool((values.get("model") or {}).get("checkpoint"))
+                        scope = CHECKPOINT if item.get("link") and has_ckpt else PRESET
+                    kept.append({"id": str(item["id"]), "name": clean_name(item["name"]), "scope": scope,
+                                 "values": values})
                 except (KeyError, TypeError, ProfileError) as exc:
                     logger.warning("Model Profiles: skipped a saved profile of %s: %s", arch, exc)
             data["profiles"][str(arch)] = kept
@@ -122,11 +138,41 @@ class Store:
             n += 1
         return f"{name} {n}"
 
-    def add(self, arch: str, name: str, values: dict) -> dict:
+    def add(self, arch: str, name: str, values: dict, scope: str = PRESET) -> dict:
+        """A new profile; a global one goes under "*" whatever `arch` is."""
+        if scope not in SCOPES:
+            raise ProfileError(f"Unknown scope {scope!r}.")
+        home = GLOBAL_KEY if scope == GLOBAL else arch
         with self.lock:
-            profile = {"id": f"u:{uuid.uuid4().hex[:8]}", "name": self._unique(arch, clean_name(name)),
-                       "values": normalize(values), "link": False}
-            self.data["profiles"].setdefault(arch, []).append(profile)
+            profile = {"id": f"u:{uuid.uuid4().hex[:8]}", "name": self._unique(home, clean_name(name)),
+                       "scope": scope, "values": normalize(values)}
+            self.data["profiles"].setdefault(home, []).append(profile)
+            self.save()
+            return profile
+
+    def find(self, profile_id: str) -> tuple[str | None, dict | None]:
+        """(the key it is kept under, the profile) for any user profile."""
+        for home, items in self.data["profiles"].items():
+            for p in items:
+                if p["id"] == profile_id:
+                    return home, p
+        return None, None
+
+    def set_scope(self, profile_id: str, scope: str, arch: str, values: dict) -> dict:
+        """Change where a profile applies, with the values that scope keeps; it moves between `arch` and "*"."""
+        if scope not in SCOPES:
+            raise ProfileError(f"Unknown scope {scope!r}.")
+        with self.lock:
+            home, profile = self.find(profile_id)
+            if profile is None:
+                raise ProfileError("That profile no longer exists.")
+            target = GLOBAL_KEY if scope == GLOBAL else arch
+            profile["scope"] = scope
+            profile["values"] = normalize(values)
+            if target != home:
+                self.data["profiles"][home] = [p for p in self.data["profiles"][home] if p["id"] != profile_id]
+                profile["name"] = self._unique(target, profile["name"])
+                self.data["profiles"].setdefault(target, []).append(profile)
             self.save()
             return profile
 
@@ -134,13 +180,6 @@ class Store:
         with self.lock:
             profile = self._require(arch, profile_id)
             profile["values"] = normalize(values)
-            self.save()
-            return profile
-
-    def set_link(self, arch: str, profile_id: str, link: bool) -> dict:
-        with self.lock:
-            profile = self._require(arch, profile_id)
-            profile["link"] = bool(link)
             self.save()
             return profile
 
@@ -155,9 +194,9 @@ class Store:
         with self.lock:
             profile = self._require(arch, profile_id)
             self.data["profiles"][arch] = [p for p in self.data["profiles"][arch] if p["id"] != profile_id]
-            for key in ("defaults", "active"):
-                if self.data[key].get(arch) == profile_id:
-                    del self.data[key][arch]
+            for key in ("defaults", "active"):  # a global profile can be the star of several presets
+                for preset in [k for k, v in self.data[key].items() if v == profile_id]:
+                    del self.data[key][preset]
             self.save()
             return profile
 

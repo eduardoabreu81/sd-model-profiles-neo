@@ -78,8 +78,9 @@ def parse_suggestions(raw, source: str, where: str = "the file") -> list[dict]:
             if profile_id in seen:
                 raise ProfileError(f"\"{name}\" appears twice for {arch}")
             seen.add(profile_id)
+            scope = item.get("scope") if item.get("scope") in ("checkpoint", "preset", "global") else None
             out.append({"id": profile_id, "arch": arch, "name": name, "kind": SUGGESTION, "source": source,
-                        "values": normalize(item.get("values"), source=f"{source} #{n}")})
+                        "scope": scope, "values": normalize(item.get("values"), source=f"{source} #{n}")})
         except ProfileError as exc:
             logger.warning("Model Profiles: skipped suggestion #%d of %s: %s", n, path, exc)
     return out
@@ -95,18 +96,50 @@ def scan(extension_dirs: list[tuple[str, str]]) -> list[dict]:
     return out
 
 
+def _short(checkpoint: str) -> str:
+    name = checkpoint.replace("\\", "/").rsplit("/", 1)[-1].split(" [")[0]
+    return name.rsplit(".", 1)[0] if name.endswith((".safetensors", ".gguf", ".ckpt", ".sft", ".pt")) else name
+
+
 class Catalog:
-    """The list for one preset at one moment; built per request, it is cheap."""
+    """The list for one preset at one moment; built per request, it is cheap.
+
+    Order: the profiles of the checkpoint in use, the preset's own, the ones for every preset, the profiles of the
+    preset's other checkpoints (choosing one switches to its checkpoint), then the suggestions and Forge default."""
 
     def __init__(self, arch: str, user: list[dict], suggestions: list[dict], factory: dict | None,
-                 default_id: str | None = None):
+                 default_id: str | None = None, global_user: list[dict] | None = None, checkpoint: str | None = None,
+                 same_checkpoint=None):
+        from .store import CHECKPOINT, GLOBAL, GLOBAL_KEY, PRESET
+
         self.arch = arch
         self.default_id = default_id
-        self.items: list[dict] = [dict(p, kind=USER, arch=arch) for p in user]
-        self.items += [s for s in suggestions if s["arch"] == arch]
+        same = same_checkpoint or (lambda a, b: a == b)
+
+        def own_checkpoint(p):
+            ckpt = (p["values"].get("model") or {}).get("checkpoint")
+            return bool(ckpt and checkpoint and same(ckpt, checkpoint))
+
+        mine = [dict(p, kind=USER, arch=arch, home=arch) for p in user]
+        everywhere = [dict(p, kind=USER, arch=arch, home=GLOBAL_KEY, scope=GLOBAL) for p in (global_user or [])]
+        for p in mine:
+            p.setdefault("scope", PRESET)
+        here = [p for p in mine if p["scope"] == CHECKPOINT and own_checkpoint(p)]
+        preset = [p for p in mine if p["scope"] == PRESET]
+        others = [p for p in mine if p["scope"] == CHECKPOINT and not own_checkpoint(p)]
+        for p in here:
+            p["group"] = "checkpoint"
+        for p in preset:
+            p["group"] = "preset"
+        for p in everywhere:
+            p["group"] = "global"
+        for p in others:
+            p["group"] = "other"
+        self.items: list[dict] = here + preset + everywhere + others
+        self.items += [dict(s, group="suggestion") for s in suggestions if s["arch"] in (arch, GLOBAL_KEY)]
         if factory:
             self.items.append({"id": factory_id(arch), "arch": arch, "name": "Forge default", "kind": FACTORY,
-                               "source": FORGE_SOURCE, "values": factory})
+                               "source": FORGE_SOURCE, "values": factory, "group": "suggestion"})
 
     def get(self, profile_id: str | None) -> dict | None:
         return next((p for p in self.items if p["id"] == profile_id), None)
@@ -117,9 +150,14 @@ class Catalog:
 
     def label(self, item: dict) -> str:
         star = "★ " if item["id"] == self.default_id else ""
-        if item["kind"] == USER:
-            return f"{star}{item['name']}"
-        return f"{star}{item['name']} · {item['source']}"
+        group = item.get("group")
+        if item["kind"] != USER:
+            return f"{star}{item['name']} · {item['source']}"
+        if group == "global":
+            return f"{star}{item['name']} · all presets"
+        if group == "other":
+            return f"{star}{item['name']} · {_short(item['values']['model']['checkpoint'])}"
+        return f"{star}{item['name']}"
 
     def choices(self) -> list[tuple[str, str]]:
         return [(self.label(p), p["id"]) for p in self.items]
@@ -127,10 +165,12 @@ class Catalog:
     def export(self) -> dict:
         """The user's profiles of this preset in the suggestion-file format, so an export can also be shipped by an
         extension as its model_profiles.json."""
-        return {"version": 1, "profiles": [{"preset": self.arch, "name": p["name"], "values": p["values"]}
-                                           for p in self.items if p["kind"] == USER]}
+        return {"version": 1, "profiles": [
+            {"preset": "*" if p.get("group") == "global" else self.arch, "name": p["name"],
+             "scope": p.get("scope"), "values": p["values"]}
+            for p in self.items if p["kind"] == USER]}
 
     def describe(self) -> list[dict]:
         """What the page script needs for its menu."""
         return [{"id": p["id"], "name": p["name"], "kind": p["kind"], "source": p.get("source", ""),
-                 "default": p["id"] == self.default_id} for p in self.items]
+                 "group": p.get("group"), "default": p["id"] == self.default_id} for p in self.items]

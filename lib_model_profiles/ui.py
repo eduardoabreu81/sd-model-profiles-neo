@@ -106,9 +106,9 @@ def _register_paste(dropdown):
 # region values in and out
 
 
-def _dropdown(arch: str, selected: str | None = None, keep: bool = False):
+def _dropdown(arch: str, selected: str | None = None, keep: bool = False, checkpoint: str | None = None):
     svc = state.service
-    cat = svc.catalog(arch)
+    cat = svc.catalog(arch, checkpoint=checkpoint)
     value = selected if keep else svc.selected(arch)
     if value is not None and cat.get(value) is None:
         value = None
@@ -238,14 +238,12 @@ def on_command(raw, profile_id, arch, *values):
     try:
         cmd = json.loads(raw or "{}")
         op = cmd.get("op")
-        current = {}
-        if op in ("save", "save_new"):
-            model = {field: values[n] for n, (field, _) in enumerate(MODEL_SLOTS)}
-            settings: dict = {}
-            for n, ((tab, field), _) in enumerate(SETTING_SLOTS):
-                settings.setdefault(tab, {})[field] = values[len(MODEL_SLOTS) + n]
-            current = svc.current_values(arch, model, settings)
-        out = svc.command(arch, profile_id, op, cmd.get("name"), current, data=cmd.get("data"))
+        model = {field: values[n] for n, (field, _) in enumerate(MODEL_SLOTS)}
+        settings: dict = {}
+        for n, ((tab, field), _) in enumerate(SETTING_SLOTS):
+            settings.setdefault(tab, {})[field] = values[len(MODEL_SLOTS) + n]
+        out = svc.command(arch, profile_id, op, cmd.get("name"), data=cmd.get("data"),
+                          screen={"model": model, "settings": settings})
         selected, export = out["select"], out["export"]
         if out["message"]:
             gr.Info(out["message"])
@@ -270,6 +268,14 @@ def paste_profile(params: dict):
         return None
     svc.store.set_active(arch, item["id"])
     return _dropdown(arch, item["id"], keep=True)
+
+
+def on_checkpoint_shown(checkpoint, arch):
+    """The checkpoint changed (by the user, a profile or a preset switch): the profiles of the new checkpoint come
+    first in the list; the selection stays."""
+    svc = state.service
+    arch = arch or ""
+    return _dropdown(arch, svc.selected(arch), keep=True, checkpoint=checkpoint or None)
 
 
 def on_profile_shown(arch):
@@ -305,5 +311,6 @@ def _bind():
                   **QUIET)
     gr.context.Context.root_block.load(on_load, inputs=[preset], outputs=[c.profile, c.state, c.arch], **QUIET)
     c.profile.change(on_profile_shown, inputs=[c.arch], outputs=[c.state], **QUIET)
+    checkpoint.change(on_checkpoint_shown, inputs=[checkpoint, c.arch], outputs=[c.profile], **QUIET)
     state.bound = True
     logger.info("Model Profiles: connected to the UI Preset, model, sampler and prompt controls")

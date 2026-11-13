@@ -13,7 +13,8 @@ How a profile lives inside Forge:
   starts from the default and the others stay one click away. With no star nothing is restored (Forge as before).
 - A profile can carry prompt tokens (LoRA tags): applying it adds them to the prompts, switching to another profile or
   preset removes exactly those tokens.
-- A profile can be linked to its checkpoint: choosing that checkpoint in Forge's list applies the profile.
+- A profile has a scope: one checkpoint (it holds the model files and is applied when that checkpoint is chosen in
+  Forge's list), its preset (settings on top of any of the preset's checkpoints) or every preset.
 """
 
 from __future__ import annotations
@@ -25,14 +26,18 @@ import os
 from . import fields
 from .catalog import FACTORY, USER, Catalog, parse_suggestions, scan
 from .fields import TABS, TOKEN_PARTS, ProfileError
-from .history import PRESET, PROFILE, History
-from .store import Store
+from .history import PRESET as PRESET_ENTRY
+from .history import PROFILE, History
+from .store import CHECKPOINT, GLOBAL, GLOBAL_KEY, PRESET, SCOPES, Store
 
 logger = logging.getLogger("model_profiles")
 SNAPSHOT_NAME = "My Forge preset"
 # the image size is the user's, not the profile's: saving from the controls leaves it out (a suggestion file may
 # still set one)
 UNSAVED_FIELDS = {"width", "height"}
+# Shift and Distilled CFG mean different things in different presets: a profile for every preset leaves them out
+PRESET_ONLY_FIELDS = {"dcfg", "hr_dcfg"}
+SCOPE_NAMES = {CHECKPOINT: "this checkpoint", PRESET: "this preset", GLOBAL: "every preset"}
 HISTORY_SHOWN = 15
 
 
@@ -64,13 +69,23 @@ class Service:
     def reload_suggestions(self):
         self._suggestions = None
 
-    def catalog(self, arch: str) -> Catalog:
+    def current_checkpoint(self) -> str | None:
+        try:
+            return self.forge.current_checkpoint()
+        except Exception:
+            return None
+
+    def catalog(self, arch: str, checkpoint: str | None = None) -> Catalog:
+        """The list for `arch`, ordered for the checkpoint in use (`checkpoint`, or the one Forge has selected)."""
         factory = None
         try:
             factory = self.forge.factory_values(arch) or None
         except Exception as exc:
             logger.warning("Model Profiles: no factory values for %s: %s", arch, exc)
-        return Catalog(arch, self.store.profiles(arch), self.suggestions(), factory, self.store.default(arch))
+        return Catalog(arch, self.store.profiles(arch), self.suggestions(), factory, self.store.default(arch),
+                       global_user=self.store.profiles(GLOBAL_KEY),
+                       checkpoint=checkpoint if checkpoint is not None else self.current_checkpoint(),
+                       same_checkpoint=self.forge.same_checkpoint)
 
     def selected(self, arch: str) -> str | None:
         active = self.store.active(arch)
@@ -111,7 +126,7 @@ class Service:
         target = {**({"model": model} if model else {}), **settings}
         if before and fields.changed(target, before):
             active = self.active_item(arch)
-            self.history.record(arch, PRESET, active["name"] if active else "Forge preset", before, reason)
+            self.history.record(arch, PRESET_ENTRY, active["name"] if active else "Forge preset", before, reason)
         self.forge.backup_config(self.backup_dir)
         if settings:
             self.forge.write_settings(arch, settings)
@@ -204,7 +219,7 @@ class Service:
         if not checkpoint:
             return None
         candidates = [p for p in self.store.profiles(arch)
-                      if p.get("link") and (p["values"].get("model") or {}).get("checkpoint")
+                      if p.get("scope") == CHECKPOINT and (p["values"].get("model") or {}).get("checkpoint")
                       and self.forge.same_checkpoint(p["values"]["model"]["checkpoint"], checkpoint)]
         if not candidates:
             return None
@@ -217,8 +232,10 @@ class Service:
     # endregion
 
     # region editing
-    def current_values(self, arch: str, model: dict, settings: dict, tokens: dict | None = None) -> dict:
-        """Canonical values from what the controls show; `settings` maps tab -> field -> value."""
+    def current_values(self, arch: str, model: dict, settings: dict, tokens: dict | None = None,
+                       scope: str = CHECKPOINT) -> dict:
+        """Canonical values from what the controls show, kept as `scope` keeps them; `settings` maps
+        tab -> field -> value."""
         keys = self.forge.option_keys(arch)
         values: dict = {}
         m = {}
@@ -234,10 +251,30 @@ class Service:
             values["tokens"] = tokens
         for tab in TABS:
             tab_values = {f: v for f, v in (settings.get(tab) or {}).items()
-                          if v is not None and f not in UNSAVED_FIELDS and fields.option_key(arch, tab, f) in keys}
+                          if v is not None and fields.option_key(arch, tab, f) in keys}
             if tab_values:
                 values[tab] = tab_values
-        return fields.normalize(values)
+        return self.for_scope(values, scope)
+
+    @staticmethod
+    def for_scope(values: dict, scope: str) -> dict:
+        """What a profile of `scope` keeps of `values`: the model files only for a checkpoint profile, no Shift /
+        Distilled CFG for every preset, never the image size."""
+        if scope not in SCOPES:
+            raise ProfileError(f"Unknown scope {scope!r}.")
+        out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in values.items()}
+        if scope == CHECKPOINT:
+            if not (out.get("model") or {}).get("checkpoint"):
+                raise ProfileError("Choose a checkpoint first: this profile is for one checkpoint.")
+        else:
+            out.pop("model", None)
+        for tab in TABS:
+            if out.get(tab):
+                out[tab] = {f: v for f, v in out[tab].items() if f not in UNSAVED_FIELDS
+                            and not (scope == GLOBAL and f in PRESET_ONLY_FIELDS)}
+                if not out[tab]:
+                    del out[tab]
+        return fields.normalize(out)
 
     def _make_active(self, arch: str, profile: dict, reason: str):
         settings = fields.settings_only(profile["values"])
@@ -250,34 +287,48 @@ class Service:
         self.history.record(arch, PROFILE, profile["name"], profile["values"], reason, profile_id=profile["id"])
 
     def command(self, arch: str, selected_id: str | None, op: str, name: str | None = None, current: dict | None = None,
-                data=None) -> dict:
-        """Run a menu command; returns {"select": profile to select, "message": for the user, "export": file or None}."""
-        current = current or {}
+                data=None, screen: dict | None = None) -> dict:
+        """Run a menu command; returns {"select": profile to select, "message": for the user, "export": file or None}.
+        `screen` is what the controls show ({"model": ..., "settings": ...}); `current` the same already in canonical
+        form."""
+        opts = data if isinstance(data, dict) else {}
+
+        def from_screen(scope):
+            if screen is not None:
+                return self.current_values(arch, screen.get("model") or {}, screen.get("settings") or {}, scope=scope)
+            return self.for_scope(current or {}, scope)
+
         cat = self.catalog(arch)
         item = cat.get(selected_id)
         out = {"select": selected_id, "message": "", "export": None}
         if op == "save":
             if item is None or item["kind"] != USER:
                 raise ProfileError("Choose a name to save these settings as a new profile.")
-            current = {**current, **({"tokens": item["values"]["tokens"]} if item["values"].get("tokens") else {})}
-            self._keep_version(arch, self.store.get(arch, item["id"]), f"before saving “{item['name']}”")
-            profile = self.store.update(arch, item["id"], current)
-            self._make_active(arch, profile, f"before saving “{profile['name']}”")
+            home, profile = self.store.find(item["id"])
+            values = from_screen(profile["scope"])
+            if profile["values"].get("tokens"):
+                values = {**values, "tokens": profile["values"]["tokens"]}
+            self._keep_version(arch, profile, f"before saving \u201c{profile['name']}\u201d")
+            profile = self.store.update(home, profile["id"], values)
+            self._make_active(arch, profile, f"before saving \u201c{profile['name']}\u201d")
             return {**out, "select": profile["id"], "message": f"Saved \"{profile['name']}\"."}
         if op == "save_new":
+            scope = opts.get("scope") or PRESET
+            values = from_screen(scope)
             # a copy keeps the prompt tokens of the profile it starts from
             if item is not None and item["values"].get("tokens"):
-                current = {**current, "tokens": item["values"]["tokens"]}
-            profile = self.store.add(arch, name, current)
-            self._make_active(arch, profile, f"before saving “{profile['name']}”")
-            return {**out, "select": profile["id"], "message": f"Saved \"{profile['name']}\" for {arch}."}
+                values = {**values, "tokens": item["values"]["tokens"]}
+            profile = self.store.add(arch, name, values, scope=scope)
+            self._make_active(arch, profile, f"before saving \u201c{profile['name']}\u201d")
+            return {**out, "select": profile["id"],
+                    "message": f"Saved \"{profile['name']}\" for {SCOPE_NAMES[scope]}."}
         if op == "export":
             exported = cat.export()
             if not exported["profiles"]:
                 raise ProfileError(f"There are no profiles of yours for {arch} to export.")
             return {**out, "export": exported, "message": f"Exported {len(exported['profiles'])} profile(s) of {arch}."}
         if op == "import":
-            return {**out, "message": self.import_profiles(data)}
+            return {**out, "message": self.import_profiles(data if isinstance(data, str) else None)}
         if item is None:
             raise ProfileError("Select a profile first.")
         if op == "default":
@@ -288,17 +339,30 @@ class Service:
             return {**out, "message": f"{arch} has no default profile now."}
         if item["kind"] != USER:
             raise ProfileError("Suggestions cannot be changed; save a copy with \"Save as new\".")
+        home, profile = self.store.find(item["id"])
+        if profile is None:
+            raise ProfileError("That profile no longer exists.")
         if op == "rename":
-            profile = self.store.rename(arch, item["id"], name)
+            profile = self.store.rename(home, profile["id"], name)
             return {**out, "select": profile["id"], "message": f"Renamed to \"{profile['name']}\"."}
         if op == "delete":
-            self._keep_version(arch, self.store.get(arch, item["id"]), f"before deleting “{item['name']}”")
-            self.store.delete(arch, item["id"])
-            return {**out, "select": None, "message": f"Deleted \"{item['name']}\". It can be restored from History."}
+            self._keep_version(arch, profile, f"before deleting \u201c{profile['name']}\u201d")
+            self.store.delete(home, profile["id"])
+            return {**out, "select": None, "message": f"Deleted \"{profile['name']}\". It can be restored from History."}
+        if op == "scope":
+            scope = opts.get("scope")
+            values = dict(profile["values"])
+            if scope == CHECKPOINT and not (values.get("model") or {}).get("checkpoint"):
+                # taking it to one checkpoint: the one on screen, with its VAE / Text Encoder and Low Bits
+                values["model"] = from_screen(CHECKPOINT).get("model")
+            values = self.for_scope(values, scope)
+            self._keep_version(arch, profile, f"before making it a profile for {SCOPE_NAMES.get(scope, scope)}")
+            profile = self.store.set_scope(profile["id"], scope, arch, values)
+            return {**out, "select": profile["id"],
+                    "message": f"\"{profile['name']}\" is now a profile for {SCOPE_NAMES[scope]}."}
         if op == "tokens":
-            data = data if isinstance(data, dict) else {}
-            values = dict(item["values"])
-            tokens = {part: fields.split_tokens(data.get(part) or "") for part in TOKEN_PARTS}
+            values = dict(profile["values"])
+            tokens = {part: fields.split_tokens(opts.get(part) or "") for part in TOKEN_PARTS}
             tokens = {k: v for k, v in tokens.items() if v}
             if tokens:
                 values["tokens"] = tokens
@@ -306,16 +370,10 @@ class Service:
                 values.pop("tokens", None)
             if fields.is_empty(values):
                 raise ProfileError("A profile needs at least one setting.")
-            self._keep_version(arch, self.store.get(arch, item["id"]), "before changing the prompt tokens")
-            self.store.update(arch, item["id"], values)
+            self._keep_version(arch, profile, "before changing the prompt tokens")
+            self.store.update(home, profile["id"], values)
             listed = ", ".join(tokens.get("prompt", []) + tokens.get("negative", [])) or "none"
-            return {**out, "message": f"Prompt tokens of \"{item['name']}\": {listed}. Apply the profile to add them."}
-        if op in ("link", "unlink"):
-            if op == "link" and not (item["values"].get("model") or {}).get("checkpoint"):
-                raise ProfileError("This profile has no checkpoint to link to.")
-            self.store.set_link(arch, item["id"], op == "link")
-            return {**out, "message": (f"Choosing its checkpoint now applies \"{item['name']}\"." if op == "link"
-                                       else f"\"{item['name']}\" is no longer linked to its checkpoint.")}
+            return {**out, "message": f"Prompt tokens of \"{profile['name']}\": {listed}. Apply the profile to add them."}
         raise ProfileError(f"Unknown command {op!r}.")
 
     def import_profiles(self, text) -> str:
@@ -331,8 +389,19 @@ class Service:
             raise ProfileError("No usable profiles in the file.")
         counts: dict = {}
         for entry in entries:
-            self.store.add(entry["arch"], entry["name"], entry["values"])
-            counts[entry["arch"]] = counts.get(entry["arch"], 0) + 1
+            if entry["arch"] == GLOBAL_KEY:
+                scope = GLOBAL
+            elif entry.get("scope") in (CHECKPOINT, PRESET):
+                scope = entry["scope"]
+            else:
+                scope = CHECKPOINT if (entry["values"].get("model") or {}).get("checkpoint") else PRESET
+            try:
+                values = self.for_scope(entry["values"], scope)
+            except ProfileError:
+                scope, values = PRESET, self.for_scope(entry["values"], PRESET)
+            self.store.add(entry["arch"], entry["name"], values, scope=scope)
+            label = "every preset" if scope == GLOBAL else entry["arch"]
+            counts[label] = counts.get(label, 0) + 1
         return "Imported " + ", ".join(f"{n} for {arch}" for arch, n in counts.items()) + "."
 
     # endregion
@@ -347,10 +416,10 @@ class Service:
             raise ProfileError("That history entry is gone.")
         when = entry["at"].replace("T", " ")[:16]
         if entry["kind"] == PROFILE:
-            profile = self.store.get(arch, entry.get("profile_id") or "")
+            home, profile = self.store.find(entry.get("profile_id") or "")
             if profile is not None:
                 self._keep_version(arch, profile, f"before restoring the version of {when}")
-                self.store.update(arch, profile["id"], entry["values"])
+                self.store.update(home, profile["id"], entry["values"])
             else:
                 profile = self.store.add(arch, entry["name"], entry["values"])
             result = self.apply(arch, profile["id"], prompts)
@@ -405,11 +474,15 @@ class Service:
             sel = {"id": selected["id"], "name": selected["name"], "kind": selected["kind"],
                    "editable": selected["kind"] == USER, "factory": selected["kind"] == FACTORY,
                    "default": selected["id"] == cat.default_id, "tokens": values.get("tokens") or {},
-                   "has_checkpoint": bool(model.get("checkpoint")), "linked": bool(selected.get("link"))}
+                   "scope": selected.get("scope"), "has_checkpoint": bool(model.get("checkpoint"))}
+        current = self.current_checkpoint()
         history = [{"id": e["id"], "at": e["at"].replace("T", " ")[:16], "kind": e["kind"], "name": e["name"],
                     "reason": e["reason"], "summary": fields.summary(e["values"], self.forge.dcfg_label(arch) or "Shift")}
                    for e in self.history_entries(arch)]
+        if selected is None:
+            current = self.current_checkpoint()
+        short = (current or "").replace("\\", "/").rsplit("/", 1)[-1].split(" [")[0]
         return json.dumps({"arch": arch, "items": cat.describe(), "selected": sel, "default": cat.default_id,
-                           "expect": expect, "history": history, "export": export})
+                           "expect": expect, "history": history, "export": export, "checkpoint": short})
 
     # endregion

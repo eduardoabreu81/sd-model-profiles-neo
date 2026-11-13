@@ -39,6 +39,17 @@ def test_daily_copy_keeps_the_newest(tmp_path):
     assert daily_copy(str(src), str(tmp_path / "b"), "config", today="20261119") is None
 
 
+def test_old_files_get_a_scope(tmp_path):
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps({"profiles": {"qwen21": [
+        {"id": "u:1", "name": "Linked", "link": True, "values": {"model": {"checkpoint": "a"}, "txt2img": {"steps": 8}}},
+        {"id": "u:2", "name": "Not linked", "values": {"model": {"checkpoint": "a"}, "txt2img": {"steps": 8}}},
+    ], "*": [{"id": "u:3", "name": "Everywhere", "values": {"txt2img": {"steps": 4}}}]}}), encoding="utf-8")
+    store = Store(str(path))
+    assert [p["scope"] for p in store.profiles("qwen21")] == ["checkpoint", "preset"]
+    assert store.profiles("*")[0]["scope"] == "global" and store.find("u:3")[0] == "*"
+
+
 def test_names_stay_unique_per_preset(tmp_path):
     store = Store(str(tmp_path / "p.json"))
     a = store.add("qwen21", "Turbo", {"steps": 8})

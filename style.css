@@ -4,29 +4,17 @@
     display: none !important;
 }
 
-/* UI Preset with Profile under it, in one column of Forge's model row */
-.model-profiles-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    flex: 0 1 300px;
-    min-width: 240px;
-}
-
-.model-profiles-stack > #forge_ui_preset {
-    width: 100%;
-    min-width: 0;
-}
-
+/* Profile, 💾 and ⋯ on a row of their own under Forge's model row */
 .model-profiles-row {
     display: flex;
     gap: 6px;
     align-items: flex-end;
+    padding: 0 0 6px; /* left edge in line with UI Preset */
 }
 
 #model_profiles_select {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 0 1 340px;
+    min-width: 200px;
 }
 
 /* the profile on screen differs from the saved one */
@@ -98,6 +86,72 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--body-text-color-subdued);
+}
+
+/* save panel: name and where the profile applies */
+.model-profiles-panel {
+    width: min(340px, calc(100vw - 16px));
+    padding: 6px 8px 8px;
+    gap: 8px;
+}
+
+.model-profiles-panel input[type=text] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 9px;
+    border: 1px solid var(--border-color-primary);
+    border-radius: var(--radius-sm, 4px);
+    background: var(--input-background-fill, var(--background-fill-secondary));
+    color: var(--body-text-color);
+    font: inherit;
+}
+
+.model-profiles-panel .scopes {
+    display: grid;
+    gap: 2px;
+}
+
+.model-profiles-panel .scopes label {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+}
+
+.model-profiles-panel .scopes label:hover {
+    background: var(--background-fill-secondary);
+}
+
+.model-profiles-panel .scopes small {
+    grid-column: 2;
+    color: var(--body-text-color-subdued);
+    font-size: 0.85em;
+}
+
+.model-profiles-panel .scopes label:has(input:disabled) {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.model-profiles-panel .actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.model-profiles-panel .actions button {
+    display: inline-block;
+    padding: 6px 14px;
+    border: 1px solid var(--border-color-primary);
+}
+
+.model-profiles-panel .actions button.primary {
+    background: var(--button-primary-background-fill, var(--color-accent));
+    border-color: transparent;
+    color: var(--button-primary-text-color, #fff);
 }
 
 .model-profiles-menu button.danger {

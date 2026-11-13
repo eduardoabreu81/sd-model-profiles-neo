@@ -38,7 +38,7 @@ def test_apply_writes_the_preset_and_selects_the_model(svc, forge):
     model, settings = ui_values(forge, "qwen21")
     settings["txt2img"].update(steps=8, cfg=1.0, scheduler="Viggle Turbo")
     current = svc.current_values("qwen21", model, settings)
-    pid = svc.command("qwen21", None, "save_new", "Turbo", current)["select"]
+    pid = svc.command("qwen21", None, "save_new", "Turbo", current, data={"scope": "checkpoint"})["select"]
 
     forge.options["qwen21_t2i_step"] = 50  # the user moves on
     result = svc.apply("qwen21", pid)
@@ -171,21 +171,76 @@ def test_tokens_command_and_save_keeps_them(svc, forge):
 # region checkpoint link
 
 
-def test_linked_checkpoint_picks_the_profile(svc):
-    turbo = svc.store.add("qwen21", "Turbo", {"checkpoint": "qwen-turbo.safetensors", "steps": 8})
-    svc.store.add("qwen21", "Unlinked", {"checkpoint": "qwen-turbo.safetensors", "steps": 4})
-    assert svc.linked("qwen21", "qwen-turbo.safetensors [abc123]") is None
-    svc.command("qwen21", turbo["id"], "link")
+def test_checkpoint_profiles_are_applied_with_their_checkpoint(svc):
+    turbo = svc.store.add("qwen21", "Turbo", {"checkpoint": "qwen-turbo.safetensors", "steps": 8}, scope="checkpoint")
+    svc.store.add("qwen21", "Preset one", {"steps": 4})
     assert svc.linked("qwen21", "qwen-turbo.safetensors [abc123]") == turbo["id"]
     assert svc.linked("qwen21", "qwen-base.safetensors") is None
-    svc.command("qwen21", turbo["id"], "unlink")
+    svc.command("qwen21", turbo["id"], "scope", data={"scope": "preset"})
     assert svc.linked("qwen21", "qwen-turbo.safetensors") is None
+    assert "model" not in svc.store.get("qwen21", turbo["id"])["values"]  # a preset profile keeps no files
 
 
-def test_link_needs_a_checkpoint(svc):
-    p = svc.store.add("qwen21", "No file", {"steps": 8})
+def test_a_checkpoint_profile_needs_a_checkpoint(svc):
     with pytest.raises(ProfileError):
-        svc.command("qwen21", p["id"], "link")
+        svc.command("qwen21", None, "save_new", "No file", fields.normalize({"steps": 8}), data={"scope": "checkpoint"})
+
+
+def test_scopes_keep_what_they_should(svc, forge):
+    screen = {"model": {"checkpoint": "qwen-turbo.safetensors [abc123]", "modules": ["te.gguf"]},
+              "settings": {"txt2img": {"steps": 8, "cfg": 1.0, "dcfg": 3.0, "width": 1328}}}
+    forge.options["wan_t2i_dcfg"] = 5.0
+    ck = svc.command("wan", None, "save_new", "Ck", data={"scope": "checkpoint"}, screen=screen)["select"]
+    pr = svc.command("wan", None, "save_new", "Pr", data={"scope": "preset"}, screen=screen)["select"]
+    gl = svc.command("wan", None, "save_new", "Gl", data={"scope": "global"}, screen=screen)["select"]
+    ck_v = svc.store.get("wan", ck)["values"]
+    pr_v = svc.store.get("wan", pr)["values"]
+    gl_v = svc.store.get("*", gl)["values"]
+    assert ck_v["model"]["checkpoint"] == "qwen-turbo.safetensors" and ck_v["txt2img"]["dcfg"] == 3.0
+    assert "model" not in pr_v and pr_v["txt2img"]["dcfg"] == 3.0
+    assert "model" not in gl_v and "dcfg" not in gl_v["txt2img"]  # Shift means something else elsewhere
+    assert all("width" not in v["txt2img"] for v in (ck_v, pr_v, gl_v))
+
+
+def test_global_profiles_show_in_every_preset_and_can_be_starred(svc, forge):
+    g = svc.store.add("qwen21", "Draft 4 steps", {"steps": 4, "cfg": 1}, scope="global")
+    assert svc.store.get("*", g["id"]) is not None
+    for arch in ("qwen21", "h3i"):
+        cat = svc.catalog(arch)
+        assert cat.get(g["id"])["group"] == "global"
+        assert ("Draft 4 steps · all presets", g["id"]) in cat.choices()
+    svc.command("h3i", g["id"], "default")
+    svc.command("qwen21", g["id"], "default")
+    assert svc.apply("h3i", g["id"])["settings"]["txt2img"]["steps"] == 4 and forge.options["h3i_t2i_step"] == 4
+    svc.command("qwen21", g["id"], "rename", "Draft")
+    assert svc.store.get("*", g["id"])["name"] == "Draft"
+    svc.command("qwen21", g["id"], "delete")
+    assert svc.store.default("qwen21") is None and svc.store.default("h3i") is None
+
+
+def test_list_order_follows_the_checkpoint_in_use(svc, forge):
+    other = svc.store.add("qwen21", "Base file", {"checkpoint": "qwen-base.safetensors", "steps": 20}, scope="checkpoint")
+    preset = svc.store.add("qwen21", "Normal", {"steps": 20})
+    mine = svc.store.add("qwen21", "Turbo file", {"checkpoint": "qwen-turbo.safetensors", "steps": 8}, scope="checkpoint")
+    every = svc.store.add("qwen21", "Draft", {"steps": 4}, scope="global")
+    forge.checkpoint = "qwen-turbo.safetensors [abc123]"
+    order = [i["id"] for i in svc.catalog("qwen21").items]
+    assert order[:4] == [mine["id"], preset["id"], every["id"], other["id"]]
+    labels = dict((v, k) for k, v in svc.catalog("qwen21").choices())
+    assert labels[other["id"]] == "Base file · qwen-base" and labels[mine["id"]] == "Turbo file"
+    # the checkpoint on screen can be passed in (the dropdown's own value)
+    order = [i["id"] for i in svc.catalog("qwen21", checkpoint="qwen-base.safetensors").items]
+    assert order[0] == other["id"]
+
+
+def test_scope_change_to_checkpoint_takes_the_one_on_screen(svc):
+    p = svc.store.add("qwen21", "Normal", {"steps": 20})
+    screen = {"model": {"checkpoint": "qwen-base.safetensors"}, "settings": {}}
+    svc.command("qwen21", p["id"], "scope", data={"scope": "checkpoint"}, screen=screen)
+    moved = svc.store.get("qwen21", p["id"])
+    assert moved["scope"] == "checkpoint" and moved["values"]["model"]["checkpoint"] == "qwen-base.safetensors"
+    svc.command("qwen21", p["id"], "scope", data={"scope": "global"}, screen=screen)
+    assert svc.store.get("qwen21", p["id"]) is None and svc.store.get("*", p["id"])["scope"] == "global"
 
 
 # endregion
@@ -291,7 +346,7 @@ def test_page_state(svc):
     svc.apply("qwen21", p["id"])
     state = json.loads(svc.page_state("qwen21", export={"x": 1}))
     sel = state["selected"]
-    assert sel["editable"] and sel["has_checkpoint"] and not sel["linked"]
+    assert sel["editable"] and sel["has_checkpoint"] and sel["scope"] == "preset"
     assert sel["tokens"] == {"prompt": ["<lora:a:1>"]}
     assert state["expect"]["txt2img_steps"] == 8 and state["expect"]["img2img_steps"] == 8
     assert state["expect"]["setting_sd_model_checkpoint"] == "qwen-turbo.safetensors [abc123]"

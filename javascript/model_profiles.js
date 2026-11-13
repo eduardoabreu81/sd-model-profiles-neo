@@ -143,11 +143,96 @@
         return answer === null ? null : answer.trim();
     }
 
-    function saveNew(state) {
-        const base = state.selected ? state.selected.name : "My profile";
-        const suggested = state.selected && state.selected.editable ? `${base} 2` : `${base} (mine)`;
-        const name = ask(`Save the current settings as a new profile for ${state.arch}:`, suggested);
-        if (name) send({ op: "save_new", name });
+    const SCOPES = [
+        { id: "checkpoint", label: "This checkpoint", hint: (s) => s.checkpoint || "no checkpoint selected" },
+        { id: "preset", label: "This preset", hint: (s) => `any ${s.arch} checkpoint` },
+        { id: "global", label: "Every preset", hint: () => "steps, CFG, sampler and tokens only" },
+    ];
+    const scopeName = (id) => (SCOPES.find((x) => x.id === id) || { label: id }).label;
+
+    // a small panel under the anchor: a name (when saving) and where the profile applies
+    function scopePanel(anchor, { title, name, scope, submitLabel, onSubmit }) {
+        closeMenu();
+        const state = readState();
+        menu = document.createElement("form");
+        menu.className = "model-profiles-menu model-profiles-panel";
+        const heading = document.createElement("div");
+        heading.className = "heading";
+        heading.textContent = title;
+        menu.appendChild(heading);
+        let input = null;
+        if (name !== undefined) {
+            input = document.createElement("input");
+            input.type = "text";
+            input.value = name;
+            input.placeholder = "Profile name";
+            input.setAttribute("aria-label", "Profile name");
+            menu.appendChild(input);
+        }
+        const group = document.createElement("div");
+        group.className = "scopes";
+        group.setAttribute("role", "radiogroup");
+        group.setAttribute("aria-label", "Applies to");
+        for (const sc of SCOPES) {
+            const label = document.createElement("label");
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = "model-profiles-scope";
+            radio.value = sc.id;
+            radio.checked = sc.id === scope;
+            radio.disabled = sc.id === "checkpoint" && !state.checkpoint;
+            const text = document.createElement("span");
+            text.textContent = sc.label;
+            const hint = document.createElement("small");
+            hint.textContent = sc.hint(state);
+            label.append(radio, text, hint);
+            group.appendChild(label);
+        }
+        menu.appendChild(group);
+        const row = document.createElement("div");
+        row.className = "actions";
+        const ok = document.createElement("button");
+        ok.type = "submit";
+        ok.className = "primary";
+        ok.textContent = submitLabel;
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", closeMenu);
+        row.append(ok, cancel);
+        menu.appendChild(row);
+        menu.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const chosen = menu.querySelector("input[type=radio]:checked");
+            const value = input ? input.value.trim() : null;
+            if (input && !value) {
+                input.focus();
+                return;
+            }
+            closeMenu();
+            onSubmit(value, chosen ? chosen.value : "preset");
+        });
+        document.body.appendChild(menu);
+        const r = anchor.getBoundingClientRect();
+        const left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 8);
+        menu.style.left = `${Math.max(8, left + window.scrollX)}px`;
+        menu.style.top = `${r.bottom + 4 + window.scrollY}px`;
+        (input || menu.querySelector("input[type=radio]:checked") || ok).focus();
+        if (input) input.select();
+    }
+
+    function saveNew(state, anchor) {
+        const sel = state.selected;
+        const base = sel ? sel.name : "My profile";
+        const suggested = sel && sel.editable ? `${base} 2` : `${base} (mine)`;
+        const scope = sel && sel.editable && sel.scope ? sel.scope : "preset";
+        scopePanel(anchor, {
+            title: "Save as a new profile",
+            name: suggested,
+            scope: scope === "checkpoint" && !state.checkpoint ? "preset" : scope,
+            submitLabel: "Save",
+            onSubmit: (name, chosen) => send({ op: "save_new", name, data: { scope: chosen } }),
+        });
     }
 
     function editTokens(sel) {
@@ -246,7 +331,7 @@
         const state = readState();
         const sel = state.selected;
         const items = [
-            { label: "Save as new profile…", run: () => saveNew(state) },
+            { label: "Save as new profile…", run: () => saveNew(state, anchor) },
             sel && !sel.default && { label: `★ Set as default for ${state.arch}`, run: () => send({ op: "default" }) },
             sel && sel.default && { label: "Remove the ★ default", run: () => send({ op: "undefault" }) },
         ];
@@ -255,9 +340,19 @@
             items.push(
                 { separator: true },
                 { label: "Prompt tokens / LoRA…", detail: count ? `${count} set` : "none", run: () => editTokens(sel) },
-                sel.has_checkpoint && {
-                    label: sel.linked ? "✓ Applied when its checkpoint is chosen" : "Apply when its checkpoint is chosen",
-                    run: () => send({ op: sel.linked ? "unlink" : "link" }),
+                {
+                    label: "Applies to…",
+                    detail: scopeName(sel.scope),
+                    keepOpen: true,
+                    run: () =>
+                        scopePanel(anchor, {
+                            title: `Where "${sel.name}" applies`,
+                            scope: sel.scope,
+                            submitLabel: "Change",
+                            onSubmit: (_, chosen) => {
+                                if (chosen !== sel.scope) send({ op: "scope", data: { scope: chosen } });
+                            },
+                        }),
                 },
                 {
                     label: "Rename…",
@@ -291,10 +386,11 @@
         if (!target) return;
         const more = target.closest(`#${ID.more}`);
         if (menu && !menu.contains(target) && !more) closeMenu();
-        if (target.closest(`#${ID.save}`)) {
+        const saveButton = target.closest(`#${ID.save}`);
+        if (saveButton) {
             const state = readState();
             if (state.selected && state.selected.editable) send({ op: "save" });
-            else saveNew(state);
+            else saveNew(state, saveButton);
         } else if (more) {
             if (menu) closeMenu();
             else mainMenu(more);
@@ -304,19 +400,18 @@
         if (e.key === "Escape") closeMenu();
     });
 
-    // Profile under UI Preset: both in one column, with 💾 and ⋯ beside the Profile dropdown
-    function stack() {
-        const preset = byId("forge_ui_preset");
+    // Profile on a row of its own under Forge's model row (UI Preset, Checkpoint, VAE / Text Encoder, Low Bits),
+    // so it never pushes those around whatever the window width
+    function placeRow() {
         const select = byId(ID.select);
         const save = byId(ID.save);
         const more = byId(ID.more);
-        if (!preset || !select || !save || !more || preset.closest(".model-profiles-stack")) return !!preset;
-        const column = document.createElement("div");
-        column.className = "model-profiles-stack";
-        preset.parentNode.insertBefore(column, preset);
+        const bar = byId("quicksettings");
+        if (!select || !save || !more || !bar) return false;
+        if (select.closest(".model-profiles-row")) return true;
         const row = document.createElement("div");
         row.className = "model-profiles-row";
-        column.append(preset, row);
+        bar.parentNode.insertBefore(row, bar.nextSibling);
         row.append(select, save, more);
         return true;
     }
@@ -324,7 +419,7 @@
     const start = () => {
         let tries = 0;
         const wait = setInterval(() => {
-            if (stack() || ++tries > 50) clearInterval(wait);
+            if (placeRow() || ++tries > 50) clearInterval(wait);
         }, 200);
         setInterval(markDirty, 800);
     };

@@ -20,13 +20,15 @@ Keep **several setups for the same UI Preset** - Qwen-Image 2.1 *Base* and *Turb
 
 ## ✨ Features
 
-- **One dropdown** next to **UI Preset**, listing the profiles of the preset on screen: yours first, then the suggestions
-- **💾 Save** updates the profile you are using; on a suggestion it makes a copy among yours
-- **⋯** - save as a new profile, set or remove the **★ default**, rename, delete
+- **One dropdown** on its own row under the model row, listing the profiles of the preset on screen: the ones of the checkpoint in use first, then the preset's, the ones for every preset, the preset's other checkpoints, and the suggestions
+- **💾 Save** updates the profile you are using; otherwise it asks for a name and **where the profile applies**:
+  - **This checkpoint** - keeps the checkpoint, VAE / Text Encoder and Low Bits, and is applied by itself when you choose that checkpoint in Forge's list (*krea2-4step*)
+  - **This preset** - settings only, on top of any checkpoint of the preset (*MOSS normal*, *MOSS turbo*)
+  - **Every preset** - steps, CFG, sampler and prompt tokens, listed in every preset (*Draft 4 steps*); Shift / Distilled CFG stay out, since they mean different things per preset
+- **⋯** - save as a new profile, set or remove the **★ default**, change where a profile applies, rename, delete
 - **★ Default per preset** - leaving a preset puts its starred profile back, so every visit starts from it while the others stay one click away. No star, no change: Forge behaves as before
 - **Suggestions** - **Forge default** (the factory values of every preset, including the ones added by model extensions) and any `model_profiles.json` shipped by an extension
 - **Prompt tokens / LoRA** - a profile can add words to the prompt and the negative prompt, such as the LoRA a *Turbo* needs; switching to another profile or preset removes exactly what it added, and a tag you edited (another weight) is left alone
-- **Linked to a checkpoint** - choose the profile's checkpoint in Forge's list and the profile is applied
 - **History** - every time a preset's settings are overwritten, and every time a profile is saved over or deleted, the previous version is recorded; restore any of the last entries from **⋯ > History**
 - **Backups** - a daily copy of Forge's `config.json` before the extension writes to it, and of the profiles file, in `model_profiles_backups/` (14 days); the profiles file also keeps its previous version as `model_profiles.json.bak`
 - **Export / Import** - share your profiles of a preset as a file; the file uses the same format as the suggestion files below
@@ -45,10 +47,12 @@ Keep **several setups for the same UI Preset** - Qwen-Image 2.1 *Base* and *Turb
 
 1. Pick a **UI Preset** as usual
 2. Set the checkpoint, sampler, steps and the rest the way this model wants them
-3. Click **💾** and name the profile (*Turbo 8 steps*)
+3. Click **💾**, name the profile (*Turbo 8 steps*) and choose where it applies: this checkpoint, this preset or every preset
 4. Set up the other variant and save it too (*Base 20 steps*)
-5. Switch with the **Profile** dropdown; mark the one you use most with **⋯ > ★ Set as default**
-6. If the Turbo needs a LoRA, select it and use **⋯ > Prompt tokens / LoRA** (`<lora:name:1>`); for a profile with its own checkpoint, **⋯ > Apply when its checkpoint is chosen**
+5. Switch with the **Profile** dropdown - or, for checkpoint profiles, just choose the checkpoint; mark the one you use most with **⋯ > ★ Set as default**
+6. If the Turbo needs a LoRA, select it and use **⋯ > Prompt tokens / LoRA** (`<lora:name:1>`)
+
+The image size is never part of a profile saved from the screen: switching profiles leaves width and height as they are.
 
 Profiles are kept in `model_profiles.json` in Forge's data folder (next to `styles.csv`), with the history in `model_profiles_history.json` and the backups in `model_profiles_backups/`, so updating the extension never touches them. Profiles of a preset whose extension is turned off stay there and come back with it.
 
@@ -59,7 +63,7 @@ Profiles are kept in `model_profiles.json` in Forge's data folder (next to `styl
 | Option | Default |
 | --- | --- |
 | Leaving a UI Preset puts its ★ default profile back into it | on |
-| Choosing a checkpoint applies the profile linked to it | on |
+| Choosing a checkpoint in the list applies its checkpoint profile | on |
 | Write the profile name to the generation parameters | on |
 
 ## 🧩 Suggestions from Extensions
@@ -78,7 +82,7 @@ Any extension can suggest settings for its model: put a `model_profiles.json` in
 }
 ```
 
-- `preset` is the UI Preset name (`xl`, `flux`, `qwen21`, or one an extension adds)
+- `preset` is the UI Preset name (`xl`, `flux`, `qwen21`, or one an extension adds), or `*` for every preset
 - top-level settings apply to txt2img and img2img; `txt2img` / `img2img` objects override them
 - settings: `sampler`, `scheduler`, `steps`, `cfg`, `shift` (or `distilled_cfg`), and for txt2img `hr_steps`, `hr_cfg`, `hr_shift`; `width` and `height` too, for a model that needs a size of its own (profiles saved from the screen leave the size out)
 - model files: `checkpoint`, `modules` (list of file names), `dtype`

@@ -52,6 +52,10 @@ def archs() -> list[str]:
     return [name for name in PresetArch.choices() if name not in disabled]
 
 
+def current_checkpoint() -> str | None:
+    return getattr(_opts(), "sd_model_checkpoint", None)
+
+
 def current_arch() -> str:
     return getattr(_opts(), "forge_preset", "") or ""
 
