@@ -274,9 +274,10 @@ def swap_tokens(text: str, old: list[str], new: list[str]) -> str:
 # endregion
 
 
-def from_options(arch: str, options: dict, keys: set | None = None) -> dict:
-    """Profile values read from Forge's preset options for `arch` (`options` maps option key to value). Values Forge
-    treats as "keep the current one" (0 for steps, CFG and sizes, empty names) are left out."""
+def from_options(arch: str, options: dict, keys: set | None = None, keep_zero: bool = False) -> dict:
+    """Profile values read from Forge's preset options for `arch` (`options` maps option key to value). Forge's 0
+    means "keep the current value" (for steps, CFG and sizes): it is left out, or kept with `keep_zero` so the preset
+    can be written back exactly as it was (snapshots, history, factory values)."""
     out: dict = {}
     model = {}
     ckpt = options.get(model_option_key(arch, "checkpoint"))
@@ -302,8 +303,8 @@ def from_options(arch: str, options: dict, keys: set | None = None) -> dict:
             if field in STR_FIELDS:
                 if isinstance(value, str) and value.strip():
                     tab_values[field] = value.strip()
-            elif isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-                tab_values[field] = _coerce(field, value)
+            elif isinstance(value, (int, float)) and not isinstance(value, bool) and (value > 0 or keep_zero):
+                tab_values[field] = _coerce(field, max(value, 0))
         if tab_values:
             out[tab] = tab_values
     return out
@@ -323,6 +324,16 @@ def to_options(arch: str, values: dict, keys: set) -> dict:
 
 def settings_only(values: dict) -> dict:
     return {tab: dict(values[tab]) for tab in TABS if values.get(tab)}
+
+
+def keeps(field: str, value) -> bool:
+    """Forge's "keep the current value": a 0 for a number. Written to the preset, never shown in a control."""
+    return field in INT_FIELDS | FLOAT_FIELDS and isinstance(value, (int, float)) and value <= 0
+
+
+def shown_settings(settings: dict) -> dict:
+    """The settings a control should show: without the "keep the current value" zeros."""
+    return {tab: {f: v for f, v in (settings.get(tab) or {}).items() if not keeps(f, v)} for tab in TABS}
 
 
 def _same(field: str, a: Any, b: Any) -> bool:
@@ -356,9 +367,22 @@ def differences(profile: dict, current: dict, same_checkpoint=None) -> list[str]
     for tab in TABS:
         cur_tab = current.get(tab) or {}
         for field, value in (profile.get(tab) or {}).items():
+            if keeps(field, value):
+                continue  # "keep the current value" cannot differ
             if field in cur_tab and not _same(field, value, cur_tab[field]):
                 diffs.append(f"{tab}.{field}")
     return diffs
+
+
+def changed(target: dict, before: dict) -> bool:
+    """Whether writing `target` changes anything in `before`, zeros included (for the history and the snapshot)."""
+    for tab in TABS:
+        old = before.get(tab) or {}
+        for field, value in (target.get(tab) or {}).items():
+            if field not in old or not _same(field, value, old[field]):
+                return True
+    old_model = before.get("model") or {}
+    return any(old_model.get(k) != v for k, v in (target.get("model") or {}).items())
 
 
 def summary(values: dict, dcfg_label: str = "Shift") -> str:
@@ -371,6 +395,7 @@ def summary(values: dict, dcfg_label: str = "Shift") -> str:
         parts.append(name.split(" [")[0].rsplit(".", 1)[0] if name.endswith((".safetensors", ".gguf", ".ckpt", ".sft"))
                      or " [" in name else name)
     tab = values.get("txt2img") or values.get("img2img") or {}
+    tab = {f: v for f, v in tab.items() if not keeps(f, v)}
     for field in ("sampler", "scheduler"):
         if field in tab:
             parts.append(tab[field])

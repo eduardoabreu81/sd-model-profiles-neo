@@ -56,10 +56,10 @@ class FakeForge:
             for field in TAB_FIELDS[tab]:
                 if field in FACTORY[arch]:
                     defaults[fields.option_key(arch, tab, field)] = FACTORY[arch][field]
-        return fields.settings_only(fields.from_options(arch, defaults, keys))
+        return fields.settings_only(fields.from_options(arch, defaults, keys, keep_zero=True))
 
     def preset_values(self, arch):
-        return fields.from_options(arch, self.options, self.option_keys(arch))
+        return fields.from_options(arch, self.options, self.option_keys(arch), keep_zero=True)
 
     def write_settings(self, arch, values):
         for key, value in fields.to_options(arch, values, self.option_keys(arch)).items():

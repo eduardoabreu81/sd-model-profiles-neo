@@ -89,7 +89,8 @@ class Service:
         except Exception as exc:
             logger.warning("Model Profiles: could not read the %s preset: %s", arch, exc)
             return
-        if fields.settings_only(current) and fields.differences(fields.settings_only(current), factory):
+        settings = fields.settings_only(current)
+        if settings and (fields.changed(settings, factory) or fields.changed(factory, settings)):
             self.store.add(arch, SNAPSHOT_NAME, current)
             logger.info("Model Profiles: kept the %s preset settings as \"%s\"", arch, SNAPSHOT_NAME)
         self.store.mark_snapshot(arch)
@@ -105,7 +106,7 @@ class Service:
         except Exception:
             before = {}
         target = {**({"model": model} if model else {}), **settings}
-        if before and fields.differences(target, before):
+        if before and fields.changed(target, before):
             active = self.active_item(arch)
             self.history.record(arch, PRESET, active["name"] if active else "Forge preset", before, reason)
         self.forge.backup_config(self.backup_dir)
@@ -118,10 +119,11 @@ class Service:
 
     # region apply
     def visible_settings(self, arch: str, settings: dict) -> dict:
-        """The settings limited to the controls this preset uses (no Shift slider value for SDXL, for example)."""
+        """The settings the controls should show: only the ones this preset uses (no Shift value for SDXL, for
+        example) and without Forge's "keep the current value" zeros, which only go into the preset."""
         keys = self.forge.option_keys(arch)
-        return {tab: {f: v for f, v in (settings.get(tab) or {}).items() if fields.option_key(arch, tab, f) in keys}
-                for tab in TABS}
+        return fields.shown_settings({tab: {f: v for f, v in (settings.get(tab) or {}).items()
+                                            if fields.option_key(arch, tab, f) in keys} for tab in TABS})
 
     @staticmethod
     def swap_prompts(prompts: dict | None, old: dict, new: dict) -> dict | None:

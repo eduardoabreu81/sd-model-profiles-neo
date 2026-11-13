@@ -301,3 +301,32 @@ def test_page_state(svc):
 
 
 # endregion
+
+
+def test_forge_keep_zeros_survive_history_and_factory(svc, forge):
+    """Sizes at 0 mean "keep the current size" in Forge's presets; restoring must bring the 0 back, and no control
+    is ever set to 0 (found on desktop-casa: the sizes stayed at 1024 after the cleanup)."""
+    assert forge.options["qwen21_t2i_width"] == 0
+    p = svc.store.add("qwen21", "Sized", {"steps": 8, "width": 1024, "height": 1024})
+    svc.apply("qwen21", p["id"])
+    assert forge.options["qwen21_t2i_width"] == 1024
+
+    before = next(e for e in svc.history.entries("qwen21") if e["kind"] == "preset")
+    assert before["values"]["txt2img"]["width"] == 0
+    r = svc.restore("qwen21", before["id"])
+    assert forge.options["qwen21_t2i_width"] == 0 and "width" not in r["settings"]["txt2img"]
+
+    svc.apply("qwen21", p["id"])
+    r = svc.apply("qwen21", "f:qwen21")
+    assert forge.options["qwen21_t2i_width"] == 0 and "width" not in r["settings"]["txt2img"]
+    state = json.loads(svc.page_state("qwen21"))
+    assert "txt2img_width" not in state["expect"]
+
+
+def test_snapshot_notices_a_size_set_to_keep(tmp_path):
+    forge = FakeForge()
+    forge.options["h3i_t2i_width"] = 0  # the factory value is 2048
+    svc = make(tmp_path, forge)
+    svc.apply("h3i", "f:h3i")
+    snap = svc.store.profiles("h3i")
+    assert [p["name"] for p in snap] == [SNAPSHOT_NAME] and snap[0]["values"]["txt2img"]["width"] == 0

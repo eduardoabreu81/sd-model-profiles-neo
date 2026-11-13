@@ -79,7 +79,7 @@ def factory_values(arch: str) -> dict:
     labels = _opts().data_labels
     keys = option_keys(arch)
     defaults = {k: labels[k].default for k in keys}
-    return fields.settings_only(fields.from_options(arch, defaults, keys))
+    return fields.settings_only(fields.from_options(arch, defaults, keys, keep_zero=True))
 
 
 def preset_values(arch: str) -> dict:
@@ -90,7 +90,7 @@ def preset_values(arch: str) -> dict:
     for field in ("checkpoint", "modules", "dtype"):
         key = fields.model_option_key(arch, field)
         data[key] = getattr(opts, key, None)
-    return fields.from_options(arch, data, keys)
+    return fields.from_options(arch, data, keys, keep_zero=True)
 
 
 def write_settings(arch: str, values: dict) -> bool:
