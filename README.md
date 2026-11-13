@@ -25,6 +25,11 @@ Keep **several setups for the same UI Preset** - Qwen-Image 2.1 *Base* and *Turb
 - **⋯** - save as a new profile, set or remove the **★ default**, rename, delete
 - **★ Default per preset** - leaving a preset puts its starred profile back, so every visit starts from it while the others stay one click away. No star, no change: Forge behaves as before
 - **Suggestions** - **Forge default** (the factory values of every preset, including the ones added by model extensions) and any `model_profiles.json` shipped by an extension
+- **Prompt tokens / LoRA** - a profile can add words to the prompt and the negative prompt, such as the LoRA a *Turbo* needs; switching to another profile or preset removes exactly what it added, and a tag you edited (another weight) is left alone
+- **Linked to a checkpoint** - choose the profile's checkpoint in Forge's list and the profile is applied
+- **History** - every time a preset's settings are overwritten, and every time a profile is saved over or deleted, the previous version is recorded; restore any of the last entries from **⋯ > History**
+- **Backups** - a daily copy of Forge's `config.json` before the extension writes to it, and of the profiles file, in `model_profiles_backups/` (14 days); the profiles file also keeps its previous version as `model_profiles.json.bak`
+- **Export / Import** - share your profiles of a preset as a file; the file uses the same format as the suggestion files below
 - **"modified" mark** when the controls no longer match the profile
 - **Generation parameters** - `Profile: Turbo 8 steps` (or `(modified)`); *Send to txt2img* and *PNG Info* bring the profile back to the dropdown
 - **Safe with model extensions** - presets added at runtime (Qwen-Image 2.1, MiniMax-H3, LTX, MOSS-Image, ...) get their profiles too, and when an extension's panel changes the sampler or steps on a checkpoint switch, the profile's values are applied again
@@ -43,8 +48,9 @@ Keep **several setups for the same UI Preset** - Qwen-Image 2.1 *Base* and *Turb
 3. Click **💾** and name the profile (*Turbo 8 steps*)
 4. Set up the other variant and save it too (*Base 20 steps*)
 5. Switch with the **Profile** dropdown; mark the one you use most with **⋯ > ★ Set as default**
+6. If the Turbo needs a LoRA, select it and use **⋯ > Prompt tokens / LoRA** (`<lora:name:1>`); for a profile with its own checkpoint, **⋯ > Apply when its checkpoint is chosen**
 
-Profiles are kept in `model_profiles.json` in Forge's data folder (next to `styles.csv`), so updating the extension never touches them. Profiles of a preset whose extension is turned off stay there and come back with it.
+Profiles are kept in `model_profiles.json` in Forge's data folder (next to `styles.csv`), with the history in `model_profiles_history.json` and the backups in `model_profiles_backups/`, so updating the extension never touches them. Profiles of a preset whose extension is turned off stay there and come back with it.
 
 ### Settings
 
@@ -53,6 +59,7 @@ Profiles are kept in `model_profiles.json` in Forge's data folder (next to `styl
 | Option | Default |
 | --- | --- |
 | Leaving a UI Preset puts its ★ default profile back into it | on |
+| Choosing a checkpoint applies the profile linked to it | on |
 | Write the profile name to the generation parameters | on |
 
 ## 🧩 Suggestions from Extensions
@@ -75,6 +82,7 @@ Any extension can suggest settings for its model: put a `model_profiles.json` in
 - top-level settings apply to txt2img and img2img; `txt2img` / `img2img` objects override them
 - settings: `sampler`, `scheduler`, `steps`, `cfg`, `shift` (or `distilled_cfg`), `width`, `height`, and for txt2img `hr_steps`, `hr_cfg`, `hr_shift`
 - model files: `checkpoint`, `modules` (list of file names), `dtype`
+- prompt tokens: `prompt` and `negative_prompt` (text with commas, or a list), such as a LoRA tag
 - anything left out keeps its current value, so a suggestion can change only the sampler and steps
 - a sampler, schedule or file that is not installed is skipped with a warning; the rest is applied
 

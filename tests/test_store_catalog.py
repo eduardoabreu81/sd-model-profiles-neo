@@ -18,6 +18,27 @@ def test_store_survives_a_restart(tmp_path):
     assert again.default("qwen21") == p["id"] and again.active("qwen21") == p["id"]
 
 
+def test_backups_of_the_profiles_file(tmp_path):
+    path = tmp_path / "model_profiles.json"
+    store = Store(str(path), backup_dir=str(tmp_path / "backups"))
+    store.add("qwen21", "One", {"steps": 8})
+    store.add("qwen21", "Two", {"steps": 4})
+    previous = json.loads((tmp_path / "model_profiles.json.bak").read_text(encoding="utf-8"))
+    assert [p["name"] for p in previous["profiles"]["qwen21"]] == ["One"]
+    assert len(list((tmp_path / "backups").glob("model_profiles-*.json"))) == 1  # one a day
+
+
+def test_daily_copy_keeps_the_newest(tmp_path):
+    from lib_model_profiles.history import daily_copy
+    src = tmp_path / "config.json"
+    src.write_text("{}", encoding="utf-8")
+    for day in range(1, 20):
+        daily_copy(str(src), str(tmp_path / "b"), "config", keep=14, today=f"202611{day:02d}")
+    kept = sorted(p.name for p in (tmp_path / "b").glob("config-*.json"))
+    assert len(kept) == 14 and kept[-1] == "config-20261119.json"
+    assert daily_copy(str(src), str(tmp_path / "b"), "config", today="20261119") is None
+
+
 def test_names_stay_unique_per_preset(tmp_path):
     store = Store(str(tmp_path / "p.json"))
     a = store.add("qwen21", "Turbo", {"steps": 8})

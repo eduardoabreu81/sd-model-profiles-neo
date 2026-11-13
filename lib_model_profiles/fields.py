@@ -13,6 +13,7 @@ imports Forge or Gradio, so the tests run on their own.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 TABS = ("txt2img", "img2img")
@@ -142,10 +143,24 @@ def normalize(values: dict, source: str = "profile") -> dict:
             raise ProfileError(f"{source}: dtype must be a name")
         model["dtype"] = model_raw["dtype"].strip()
 
-    shared = {k: v for k, v in values.items() if k not in ("model", "checkpoint", "modules", "dtype", *TABS)}
+    tokens_raw = dict(values.get("tokens") or {})
+    for key, target in (("prompt", "prompt"), ("negative_prompt", "negative"), ("negative", "negative")):
+        if key in values:
+            tokens_raw[target] = values[key]
+    tokens = {}
+    for part in TOKEN_PARTS:
+        if tokens_raw.get(part):
+            parsed = split_tokens(tokens_raw[part], source)
+            if parsed:
+                tokens[part] = parsed
+
+    reserved = ("model", "checkpoint", "modules", "dtype", "tokens", "prompt", "negative_prompt", "negative", *TABS)
+    shared = {k: v for k, v in values.items() if k not in reserved}
     out: dict = {}
     if model:
         out["model"] = model
+    if tokens:
+        out["tokens"] = tokens
     for tab in TABS:
         merged = dict(shared)
         override = values.get(tab) or {}
@@ -161,7 +176,102 @@ def normalize(values: dict, source: str = "profile") -> dict:
 
 
 def is_empty(values: dict) -> bool:
-    return not any(values.get(part) for part in ("model", *TABS))
+    return not any(values.get(part) for part in ("model", "tokens", *TABS))
+
+
+# region prompt tokens
+# A profile can carry words for the prompt, mostly LoRA tags (a "turbo" is often a LoRA, not a checkpoint). Applying
+# the profile adds them to the prompts of both tabs; switching to another profile removes exactly the ones the previous
+# profile added and nothing else. A token the user edited (another weight, say) no longer matches and is left alone.
+
+TOKEN_PARTS = ("prompt", "negative")
+_LORA = re.compile(r"<[^<>]+>")
+
+
+def split_tokens(raw, source: str = "profile") -> list[str]:
+    """Tokens from "a, <lora:x:1>, b" or a list. Commas inside <...> do not split."""
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, str):
+        items, depth, cur = [], 0, ""
+        for ch in raw:
+            if ch == "<":
+                depth += 1
+            elif ch == ">":
+                depth = max(0, depth - 1)
+            if ch in ",\n" and depth == 0:
+                items.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        items.append(cur)
+    else:
+        raise ProfileError(f"{source}: prompt tokens must be text")
+    out = []
+    for item in items:
+        if not isinstance(item, str):
+            raise ProfileError(f"{source}: prompt tokens must be text")
+        token = " ".join(item.split())
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def lora_tags(text: str) -> list[str]:
+    return [m.group(0) for m in _LORA.finditer(text or "") if m.group(0).lower().startswith(("<lora:", "<lyco:"))]
+
+
+def split_tokens_keep(text: str) -> list[str]:
+    """The prompt cut at top-level commas, empty pieces kept (so the rest of the prompt is rebuilt as it was)."""
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    out.append(cur)
+    return out
+
+
+def remove_tokens(text: str, tokens: list[str]) -> str:
+    if not text or not tokens:
+        return text or ""
+    wanted = set(tokens)
+    pieces = split_tokens_keep(text)
+    kept = [p for p in pieces if p.strip() not in wanted]
+    if len(kept) == len(pieces):
+        # a token glued to other words without a comma ("cat <lora:x:1>"): remove that exact text only
+        out = text
+        for token in tokens:
+            if token.startswith("<") and token in out:
+                out = out.replace(token, "")
+        return re.sub(r"[ \t]{2,}", " ", out).strip()
+    rebuilt = ",".join(kept)
+    return re.sub(r"^\s*,\s*|\s*,\s*$", "", rebuilt).strip()
+
+
+def add_tokens(text: str, tokens: list[str]) -> str:
+    text = text or ""
+    present = {p.strip() for p in split_tokens_keep(text)}
+    missing = [t for t in tokens if t not in present and t not in text]
+    if not missing:
+        return text
+    base = text.rstrip()
+    joiner = "" if not base else (" " if base.endswith(",") else ", ")
+    return base + joiner + ", ".join(missing)
+
+
+def swap_tokens(text: str, old: list[str], new: list[str]) -> str:
+    keep_old = [t for t in old if t not in new]
+    return add_tokens(remove_tokens(text, keep_old), new)
+
+
+# endregion
 
 
 def from_options(arch: str, options: dict, keys: set | None = None) -> dict:

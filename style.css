@@ -51,6 +51,36 @@
     outline: none;
 }
 
+.model-profiles-menu {
+    max-height: 70vh;
+    overflow-y: auto;
+    max-width: min(460px, calc(100vw - 16px));
+}
+
+.model-profiles-menu button {
+    display: grid;
+    gap: 2px;
+}
+
+.model-profiles-menu button small {
+    color: var(--body-text-color-subdued);
+    font-size: 0.85em;
+}
+
+.model-profiles-menu .separator {
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--border-color-primary);
+}
+
+.model-profiles-menu .heading {
+    padding: 6px 10px 2px;
+    font-size: 0.8em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--body-text-color-subdued);
+}
+
 .model-profiles-menu button.danger {
     color: var(--error-text-color, #e05252);
 }

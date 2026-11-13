@@ -124,6 +124,12 @@ class FakeForge:
     def extension_dirs(self):
         return self.ext_dirs
 
+    def backup_config(self, folder):
+        self.backups = getattr(self, "backups", 0) + 1
+
+    def dcfg_label(self, arch):
+        return "Shift" if arch == "wan" else None
+
     def data_file(self):
         raise AssertionError("tests pass their own Store")
 

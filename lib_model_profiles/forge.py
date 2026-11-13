@@ -266,3 +266,11 @@ def extension_dirs() -> list[tuple[str, str]]:
 def data_file() -> str:
     from modules import paths_internal
     return os.path.join(paths_internal.data_path, "model_profiles.json")
+
+
+def backup_config(folder: str | None):
+    """A copy of Forge's config.json a day, before the extension writes to it."""
+    from modules import shared
+
+    from .history import daily_copy
+    daily_copy(shared.config_filename, folder, "config")

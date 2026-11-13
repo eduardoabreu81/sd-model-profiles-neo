@@ -49,10 +49,19 @@ def read_suggestions(path: str, source: str) -> list[dict]:
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Model Profiles: could not read %s: %s", path, exc)
         return []
+    try:
+        return parse_suggestions(raw, source, where=path)
+    except ProfileError as exc:
+        logger.warning("Model Profiles: %s", exc)
+        return []
+
+
+def parse_suggestions(raw, source: str, where: str = "the file") -> list[dict]:
+    """Entries of a suggestion file (also the format of exported profiles); bad entries are skipped with a warning."""
     items = raw.get("profiles") if isinstance(raw, dict) else None
     if not isinstance(items, list):
-        logger.warning("Model Profiles: %s has no \"profiles\" list", path)
-        return []
+        raise ProfileError(f"{where} has no \"profiles\" list")
+    path = where
     out, seen = [], set()
     for n, item in enumerate(items, 1):
         try:
@@ -114,6 +123,12 @@ class Catalog:
 
     def choices(self) -> list[tuple[str, str]]:
         return [(self.label(p), p["id"]) for p in self.items]
+
+    def export(self) -> dict:
+        """The user's profiles of this preset in the suggestion-file format, so an export can also be shipped by an
+        extension as its model_profiles.json."""
+        return {"version": 1, "profiles": [{"preset": self.arch, "name": p["name"], "values": p["values"]}
+                                           for p in self.items if p["kind"] == USER]}
 
     def describe(self) -> list[dict]:
         """What the page script needs for its menu."""

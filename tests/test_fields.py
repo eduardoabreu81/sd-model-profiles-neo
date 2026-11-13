@@ -50,6 +50,32 @@ def test_differences_only_look_at_what_the_profile_sets():
     assert fields.differences(profile, {"txt2img": {"steps": 9}}) == ["txt2img.steps"]
 
 
+def test_prompt_tokens_in_values():
+    values = fields.normalize({"steps": 8, "prompt": "<lora:a,b:1>, fast", "negative_prompt": ["lowres"]})
+    assert values["tokens"] == {"prompt": ["<lora:a,b:1>", "fast"], "negative": ["lowres"]}
+    assert fields.normalize({"prompt": "<lora:x:1>"}) == {"tokens": {"prompt": ["<lora:x:1>"]}}
+
+
+@pytest.mark.parametrize("text, tokens, expected", [
+    ("a cat, <lora:x:1>, sunset", ["<lora:x:1>"], "a cat, sunset"),
+    ("<lora:x:1>, a cat", ["<lora:x:1>"], "a cat"),
+    ("a cat <lora:x:1>", ["<lora:x:1>"], "a cat"),
+    ("a cat, <lora:x:0.5>", ["<lora:x:1>"], "a cat, <lora:x:0.5>"),
+    ("line one,\nline two, <lora:x:1>", ["<lora:x:1>"], "line one,\nline two"),
+])
+def test_remove_tokens(text, tokens, expected):
+    assert fields.remove_tokens(text, tokens) == expected
+
+
+def test_add_and_swap_tokens():
+    assert fields.add_tokens("", ["<lora:x:1>"]) == "<lora:x:1>"
+    assert fields.add_tokens("a cat,", ["<lora:x:1>"]) == "a cat, <lora:x:1>"
+    assert fields.add_tokens("a cat, <lora:x:1>", ["<lora:x:1>"]) == "a cat, <lora:x:1>"
+    assert fields.swap_tokens("a cat, <lora:x:1>", ["<lora:x:1>"], ["<lora:y:1>"]) == "a cat, <lora:y:1>"
+    assert fields.swap_tokens("a cat, <lora:x:1>", ["<lora:x:1>"], ["<lora:x:1>"]) == "a cat, <lora:x:1>"
+    assert fields.lora_tags("a <lora:x:1> b <hypernet:z:1> <lyco:y:1>") == ["<lora:x:1>", "<lyco:y:1>"]
+
+
 def test_summary_names_the_third_slider():
     values = fields.normalize({"checkpoint": "dir/qwen-turbo.safetensors", "sampler": "Euler", "steps": 8, "cfg": 1,
                                "shift": 3, "width": 1328, "height": 1328})

@@ -40,6 +40,8 @@ def on_ui_settings():
     options = options_section(("model_profiles", "Model Profiles", "presets"), {
         "model_profiles_restore_default": OptionInfo(
             True, "Leaving a UI Preset puts its ★ default profile back into it"),
+        "model_profiles_link_checkpoint": OptionInfo(
+            True, "Choosing a checkpoint applies the profile linked to it"),
         "model_profiles_infotext": OptionInfo(
             True, "Write the profile name to the generation parameters (\"Profile: ...\")"),
     })

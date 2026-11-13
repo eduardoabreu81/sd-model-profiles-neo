@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
+import shutil
 import threading
 import uuid
 
 from .fields import ProfileError, normalize
+from .history import daily_copy, write_json
 
 VERSION = 1
 NAME_LIMIT = 60
@@ -40,8 +41,9 @@ def clean_name(name) -> str:
 
 
 class Store:
-    def __init__(self, path: str):
+    def __init__(self, path: str, backup_dir: str | None = None):
         self.path = path
+        self.backup_dir = backup_dir
         self.lock = threading.RLock()
         self.data = _empty()
         self.load()
@@ -78,7 +80,8 @@ class Store:
             for item in items:
                 try:
                     kept.append({"id": str(item["id"]), "name": clean_name(item["name"]),
-                                 "values": normalize(item["values"], source=f"{arch}/{item.get('name')}")})
+                                 "values": normalize(item["values"], source=f"{arch}/{item.get('name')}"),
+                                 "link": bool(item.get("link", False))})
                 except (KeyError, TypeError, ProfileError) as exc:
                     logger.warning("Model Profiles: skipped a saved profile of %s: %s", arch, exc)
             data["profiles"][str(arch)] = kept
@@ -93,20 +96,13 @@ class Store:
 
     def save(self):
         with self.lock:
-            folder = os.path.dirname(os.path.abspath(self.path))
-            os.makedirs(folder, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(prefix=".model_profiles.", suffix=".json", dir=folder)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(self.data, f, indent=2, ensure_ascii=False)
-                    f.write("\n")
-                os.replace(tmp, self.path)
-            except BaseException:
+            if os.path.isfile(self.path):
+                daily_copy(self.path, self.backup_dir, "model_profiles")
                 try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                raise
+                    shutil.copy2(self.path, f"{self.path}.bak")
+                except OSError as exc:
+                    logger.warning("Model Profiles: could not keep the previous profiles file: %s", exc)
+            write_json(self.path, self.data)
 
     # endregion
 
@@ -129,7 +125,7 @@ class Store:
     def add(self, arch: str, name: str, values: dict) -> dict:
         with self.lock:
             profile = {"id": f"u:{uuid.uuid4().hex[:8]}", "name": self._unique(arch, clean_name(name)),
-                       "values": normalize(values)}
+                       "values": normalize(values), "link": False}
             self.data["profiles"].setdefault(arch, []).append(profile)
             self.save()
             return profile
@@ -138,6 +134,13 @@ class Store:
         with self.lock:
             profile = self._require(arch, profile_id)
             profile["values"] = normalize(values)
+            self.save()
+            return profile
+
+    def set_link(self, arch: str, profile_id: str, link: bool) -> dict:
+        with self.lock:
+            profile = self._require(arch, profile_id)
+            profile["link"] = bool(link)
             self.save()
             return profile
 
