@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/banner.jpg" alt="Model Profiles for Forge Neo banner"/>
+</p>
+
 # 🎚️ Model Profiles for Forge Neo
 
 <div align="center">
