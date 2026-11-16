@@ -95,3 +95,15 @@ Any extension can suggest settings for its model: put a `model_profiles.json` in
 - [Forge Neo](https://github.com/Haoming02/sd-webui-forge-classic/tree/neo) by Haoming02, whose per-preset settings this builds on
 - The idea came from [Haoming02/sd-webui-forge-classic#1636](https://github.com/Haoming02/sd-webui-forge-classic/issues/1636)
 - [sd-aspect-ratio-plus](https://github.com/anxety-solo/sd-aspect-ratio-plus) for the "one click, no clutter" spirit
+
+---
+
+<div align="center">
+
+Made with ❤️ for the Stable Diffusion community
+
+**[Report Bug](https://github.com/eduardoabreu81/sd-model-profiles-neo/issues)** • **[Request Feature](https://github.com/eduardoabreu81/sd-model-profiles-neo/issues)** • **[☕ Ko-fi](https://ko-fi.com/eduardoabreu81)**
+
+<sub>More Forge Neo extensions at <a href="https://eduardoabreu81.github.io/">eduardoabreu81.github.io</a></sub>
+
+</div>
